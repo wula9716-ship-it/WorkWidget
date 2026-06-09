@@ -1,24 +1,16 @@
 """
 桌面待办小组件 - Desktop Todo Widget
-一个简洁的桌面悬浮待办事项管理工具
-
 技术栈: Python 3 + tkinter (标准库，零依赖)
-原理:
-  - 使用 tkinter 创建无边框、始终置顶的悬浮窗口
-  - overrideredirect(True) 去掉系统标题栏
-  - attributes("-topmost", True) 保持窗口置顶
-  - 任务数据存储在本地 JSON 文件中
-  - 自动检测日期，新的一天自动清空任务
+核心: overrideredirect(True) 无边框 + attributes("-topmost") 置顶 + JSON持久化
 """
 
 import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import messagebox
-import json
-import os
+import json, os
 from datetime import datetime
 
-# === 数据存储 ===
+# === 数据 ===
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "todo_data.json")
 
 def load_tasks():
@@ -31,223 +23,255 @@ def load_tasks():
 
 def save_tasks(tasks):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump({
-            "date": datetime.now().strftime("%Y-%m-%d"),
-            "tasks": tasks
-        }, f, ensure_ascii=False, indent=2)
+        json.dump({"date": datetime.now().strftime("%Y-%m-%d"), "tasks": tasks}, f, ensure_ascii=False, indent=2)
 
-# === 颜色方案 (工业/机械风格) ===
-BG = "#1e1e1e"
-BG_CARD = "#2d2d2d"
-BG_INPUT = "#3a3a3a"
-BORDER = "#444444"
-ACCENT = "#ff9800"
-ACCENT_HOVER = "#ffb74d"
-TEXT = "#e0e0e0"
-TEXT_DIM = "#888888"
-GREEN = "#4caf50"
-RED = "#f44336"
+# === 颜色 ===
+BG = "#1e1e1e"; BG_CARD = "#2d2d2d"; BG_INPUT = "#3a3a3a"
+BORDER = "#444444"; ACCENT = "#ff9800"; ACCENT_HOVER = "#ffb74d"
+TEXT = "#e0e0e0"; TEXT_DIM = "#888888"; GREEN = "#4caf50"; RED = "#f44336"
+
+# === 窗口参数 ===
+MIN_W, MIN_H, MAX_W, MAX_H = 280, 200, 800, 1000
+EDGE = 6  # 缩放热区
 
 # === 主窗口 ===
 root = tk.Tk()
 root.title("每日待办")
-root.overrideredirect(True)      # 无边框
-root.attributes("-topmost", True)  # 始终置顶
-root.attributes("-alpha", 0.95)   # 轻微透明
+root.overrideredirect(True)
+root.attributes("-topmost", True)
+root.attributes("-alpha", 0.95)
 root.configure(bg=BG)
 
-WIN_W = 360
-WIN_H = 520
-screen_w = root.winfo_screenwidth()
-root.geometry(f"{WIN_W}x{WIN_H}+{screen_w - WIN_W - 20}+60")
+WIN_W, WIN_H = 360, 520
+sw = root.winfo_screenwidth()
+root.geometry(f"{WIN_W}x{WIN_H}+{sw - WIN_W - 20}+60")
+
+# === 缩放 ===
+rsz = {"edge": None, "x": 0, "y": 0, "w": 0, "h": 0, "wx": 0, "wy": 0}
+
+def get_edge(e):
+    w, h = root.winfo_width(), root.winfo_height()
+    ed = ""
+    if e.y <= EDGE: ed += "n"
+    elif e.y >= h - EDGE: ed += "s"
+    if e.x <= EDGE: ed += "w"
+    elif e.x >= w - EDGE: ed += "e"
+    return ed
+
+def edge_cursor(ed):
+    m = {"n":"sb_v_double_arrow","s":"sb_v_double_arrow","e":"sb_h_double_arrow","w":"sb_h_double_arrow",
+         "ne":"size_ne_sw","sw":"size_ne_sw","nw":"size_nw_se","se":"size_nw_se"}
+    return m.get(ed, "")
+
+def on_motion(e):
+    if rsz["edge"]: return
+    root.configure(cursor=edge_cursor(get_edge(e)))
+
+def on_press(e):
+    ed = get_edge(e)
+    if not ed: return
+    rsz.update(edge=ed, x=e.x_root, y=e.y_root, w=root.winfo_width(), h=root.winfo_height(),
+               wx=root.winfo_x(), wy=root.winfo_y())
+
+def on_drag(e):
+    ed = rsz["edge"]
+    if not ed: return
+    dx, dy = e.x_root - rsz["x"], e.y_root - rsz["y"]
+    nx, ny, nw, nh = rsz["wx"], rsz["wy"], rsz["w"], rsz["h"]
+    if "e" in ed: nw = max(MIN_W, min(MAX_W, rsz["w"] + dx))
+    if "w" in ed: nw = max(MIN_W, min(MAX_W, rsz["w"] - dx)); nx = rsz["wx"] + rsz["w"] - nw
+    if "s" in ed: nh = max(MIN_H, min(MAX_H, rsz["h"] + dy))
+    if "n" in ed: nh = max(MIN_H, min(MAX_H, rsz["h"] - dy)); ny = rsz["wy"] + rsz["h"] - nh
+    root.geometry(f"{nw}x{nh}+{nx}+{ny}")
+
+def on_release(e):
+    rsz["edge"] = None
+
+root.bind("<Motion>", on_motion)
+root.bind("<Button-1>", on_press)
+root.bind("<B1-Motion>", on_drag)
+root.bind("<ButtonRelease-1>", on_release)
+
+# === 最小化 ===
+mini_flag = False
+
+def minimize():
+    global mini_flag
+    mini_flag = True
+    root.overrideredirect(False)
+    root.iconify()
+
+def on_map(e):
+    global mini_flag
+    if mini_flag:
+        mini_flag = False
+        root.overrideredirect(True)
+        root.attributes("-topmost", True)
+
+root.bind("<Map>", on_map)
 
 # === 拖动 ===
-drag_data = {"x": 0, "y": 0}
+dd = {"x": 0, "y": 0}
 
-def start_drag(event):
-    drag_data["x"] = event.x
-    drag_data["y"] = event.y
+def start_drag(e):
+    if get_edge(e): return
+    dd["x"], dd["y"] = e.x, e.y
 
-def do_drag(event):
-    root.geometry(f"+{root.winfo_x() + event.x - drag_data['x']}+{root.winfo_y() + event.y - drag_data['y']}")
+def do_drag(e):
+    if rsz["edge"]: return
+    root.geometry(f"+{root.winfo_x()+e.x-dd['x']}+{root.winfo_y()+e.y-dd['y']}")
 
 # === 字体 ===
-FONT_TITLE = tkfont.Font(family="Microsoft YaHei", size=13, weight="bold")
-FONT_DATE = tkfont.Font(family="Microsoft YaHei", size=9)
-FONT_TASK = tkfont.Font(family="Microsoft YaHei", size=11)
-FONT_TASK_DONE = tkfont.Font(family="Microsoft YaHei", size=11, overstrike=1)
-FONT_INPUT = tkfont.Font(family="Microsoft YaHei", size=11)
-FONT_BTN = tkfont.Font(family="Microsoft YaHei", size=10)
-FONT_STAT = tkfont.Font(family="Microsoft YaHei", size=9)
-FONT_ICON = tkfont.Font(family="Segoe UI Emoji", size=11)
+FT = tkfont.Font(family="Microsoft YaHei", size=13, weight="bold")
+FD = tkfont.Font(family="Microsoft YaHei", size=9)
+FNT = tkfont.Font(family="Microsoft YaHei", size=11)
+FNTD = tkfont.Font(family="Microsoft YaHei", size=11, overstrike=1)
+FI = tkfont.Font(family="Microsoft YaHei", size=11)
+FB = tkfont.Font(family="Microsoft YaHei", size=10)
+FS = tkfont.Font(family="Microsoft YaHei", size=9)
+FI2 = tkfont.Font(family="Segoe UI Emoji", size=11)
 
 tasks = load_tasks()
 
-# === UI构建 ===
-main_frame = tk.Frame(root, bg=BG, padx=16, pady=12)
-main_frame.pack(fill=tk.BOTH, expand=True)
+# === UI ===
+mf = tk.Frame(root, bg=BG, padx=16, pady=12)
+mf.pack(fill=tk.BOTH, expand=True)
 
 # 标题栏
-title_bar = tk.Frame(main_frame, bg=BG)
-title_bar.pack(fill=tk.X, pady=(0, 12))
-for w in [title_bar]:
-    w.bind("<Button-1>", start_drag)
-    w.bind("<B1-Motion>", do_drag)
+tb = tk.Frame(mf, bg=BG)
+tb.pack(fill=tk.X, pady=(0, 12))
+tb.bind("<Button-1>", start_drag); tb.bind("<B1-Motion>", do_drag)
 
-left_title = tk.Frame(title_bar, bg=BG)
-left_title.pack(side=tk.LEFT)
-left_title.bind("<Button-1>", start_drag)
-left_title.bind("<B1-Motion>", do_drag)
+lt = tk.Frame(tb, bg=BG)
+lt.pack(side=tk.LEFT)
+lt.bind("<Button-1>", start_drag); lt.bind("<B1-Motion>", do_drag)
 
-icon_label = tk.Label(left_title, text="☑", font=FONT_ICON, fg=ACCENT, bg=BG)
-icon_label.pack(side=tk.LEFT, padx=(0, 8))
-icon_label.bind("<Button-1>", start_drag)
-icon_label.bind("<B1-Motion>", do_drag)
+tk.Label(lt, text="☑", font=FI2, fg=ACCENT, bg=BG).pack(side=tk.LEFT, padx=(0, 8))
+tk.Label(lt, text="每日待办", font=FT, fg=TEXT, bg=BG).pack(side=tk.LEFT)
 
-title_label = tk.Label(left_title, text="每日待办", font=FONT_TITLE, fg=TEXT, bg=BG)
-title_label.pack(side=tk.LEFT)
-title_label.bind("<Button-1>", start_drag)
-title_label.bind("<B1-Motion>", do_drag)
+# 控制按钮
+cf = tk.Frame(tb, bg=BG)
+cf.pack(side=tk.RIGHT)
 
-close_btn = tk.Label(title_bar, text=" × ", font=("Consolas", 14), fg=TEXT_DIM, bg=BG, cursor="hand2")
-close_btn.pack(side=tk.RIGHT)
-close_btn.bind("<Button-1>", lambda e: root.destroy())
-close_btn.bind("<Enter>", lambda e: close_btn.configure(fg=RED))
-close_btn.bind("<Leave>", lambda e: close_btn.configure(fg=TEXT_DIM))
+minb = tk.Label(cf, text=" — ", font=("Consolas", 12), fg=TEXT_DIM, bg=BG, cursor="hand2")
+minb.pack(side=tk.LEFT, padx=1)
+minb.bind("<Button-1>", lambda e: minimize())
+minb.bind("<Enter>", lambda e: minb.configure(fg=ACCENT))
+minb.bind("<Leave>", lambda e: minb.configure(fg=TEXT_DIM))
 
-WEEKDAYS = {"Monday": "周一", "Tuesday": "周二", "Wednesday": "周三",
-            "Thursday": "周四", "Friday": "周五", "Saturday": "周六", "Sunday": "周日"}
-date_str = datetime.now().strftime("%m月%d日 %A")
-for en, zh in WEEKDAYS.items():
-    date_str = date_str.replace(en, zh)
+clb = tk.Label(cf, text=" × ", font=("Consolas", 14), fg=TEXT_DIM, bg=BG, cursor="hand2")
+clb.pack(side=tk.LEFT, padx=1)
+clb.bind("<Button-1>", lambda e: root.destroy())
+clb.bind("<Enter>", lambda e: clb.configure(fg=RED))
+clb.bind("<Leave>", lambda e: clb.configure(fg=TEXT_DIM))
 
-date_label = tk.Label(title_bar, text=date_str, font=FONT_DATE, fg=TEXT_DIM, bg=BG)
-date_label.pack(side=tk.RIGHT, padx=(0, 12))
-date_label.bind("<Button-1>", start_drag)
-date_label.bind("<B1-Motion>", do_drag)
+# 日期
+WK = {"Monday":"周一","Tuesday":"周二","Wednesday":"周三","Thursday":"周四","Friday":"周五","Saturday":"周六","Sunday":"周日"}
+ds = datetime.now().strftime("%m月%d日 %A")
+for k, v in WK.items(): ds = ds.replace(k, v)
+dl = tk.Label(tb, text=ds, font=FD, fg=TEXT_DIM, bg=BG)
+dl.pack(side=tk.RIGHT, padx=(0, 12))
+dl.bind("<Button-1>", start_drag); dl.bind("<B1-Motion>", do_drag)
 
 # 分割线
-tk.Frame(main_frame, bg=BORDER, height=1).pack(fill=tk.X, pady=(0, 12))
+tk.Frame(mf, bg=BORDER, height=1).pack(fill=tk.X, pady=(0, 12))
 
 # 输入区
-input_frame = tk.Frame(main_frame, bg=BG_INPUT, highlightbackground=BORDER, highlightthickness=1, highlightcolor=ACCENT)
-input_frame.pack(fill=tk.X, pady=(0, 12))
+inf = tk.Frame(mf, bg=BG_INPUT, highlightbackground=BORDER, highlightthickness=1, highlightcolor=ACCENT)
+inf.pack(fill=tk.X, pady=(0, 12))
+ini = tk.Frame(inf, bg=BG_INPUT)
+ini.pack(fill=tk.X, padx=2, pady=2)
 
-input_inner = tk.Frame(input_frame, bg=BG_INPUT)
-input_inner.pack(fill=tk.X, padx=2, pady=2)
-
-entry = tk.Entry(input_inner, font=FONT_INPUT, fg=TEXT, bg=BG_INPUT, insertbackground=TEXT,
-                 relief=tk.FLAT, highlightthickness=0, borderwidth=0)
+entry = tk.Entry(ini, font=FI, fg=TEXT, bg=BG_INPUT, insertbackground=TEXT, relief=tk.FLAT, highlightthickness=0, borderwidth=0)
 entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0), pady=6)
 
-add_btn = tk.Label(input_inner, text=" 添加 ", font=FONT_BTN, fg="#000", bg=ACCENT, cursor="hand2", padx=12, pady=4)
-add_btn.pack(side=tk.RIGHT, padx=(4, 4), pady=4)
+ab = tk.Label(ini, text=" 添加 ", font=FB, fg="#000", bg=ACCENT, cursor="hand2", padx=12, pady=4)
+ab.pack(side=tk.RIGHT, padx=(4, 4), pady=4)
 
 # 任务列表
-list_canvas = tk.Canvas(main_frame, bg=BG, highlightthickness=0, borderwidth=0)
-list_scrollbar = tk.Scrollbar(main_frame, orient=tk.VERTICAL, command=list_canvas.yview)
-list_frame = tk.Frame(list_canvas, bg=BG)
+lc = tk.Canvas(mf, bg=BG, highlightthickness=0, borderwidth=0)
+ls = tk.Scrollbar(mf, orient=tk.VERTICAL, command=lc.yview)
+lf = tk.Frame(lc, bg=BG)
+lf.bind("<Configure>", lambda e: lc.configure(scrollregion=lc.bbox("all")))
+lc.create_window((0, 0), window=lf, anchor="nw")
+lc.configure(yscrollcommand=ls.set)
+ls.pack(side=tk.RIGHT, fill=tk.Y, pady=(0, 4))
+lc.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
 
-list_frame.bind("<Configure>", lambda e: list_canvas.configure(scrollregion=list_canvas.bbox("all")))
-list_canvas.create_window((0, 0), window=list_frame, anchor="nw")
-list_canvas.configure(yscrollcommand=list_scrollbar.set)
-
-list_scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=(0, 4))
-list_canvas.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
-
-def on_mousewheel(event):
-    list_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-list_canvas.bind_all("<MouseWheel>", on_mousewheel)
+lc.bind_all("<MouseWheel>", lambda e: lc.yview_scroll(int(-1*(e.delta/120)), "units"))
 
 # 底部
-bottom_frame = tk.Frame(main_frame, bg=BG)
-bottom_frame.pack(fill=tk.X, pady=(8, 0))
+bf = tk.Frame(mf, bg=BG)
+bf.pack(fill=tk.X, pady=(8, 0))
+tk.Frame(bf, bg=BORDER, height=1).pack(fill=tk.X, pady=(0, 8))
+sf = tk.Frame(bf, bg=BG)
+sf.pack(fill=tk.X)
+sl = tk.Label(sf, text="", font=FS, fg=TEXT_DIM, bg=BG)
+sl.pack(side=tk.LEFT)
+rb = tk.Label(sf, text=" 重置 ", font=FB, fg=TEXT_DIM, bg=BG_INPUT, cursor="hand2", padx=8, pady=2)
+rb.pack(side=tk.RIGHT)
 
-tk.Frame(bottom_frame, bg=BORDER, height=1).pack(fill=tk.X, pady=(0, 8))
-
-stats_frame = tk.Frame(bottom_frame, bg=BG)
-stats_frame.pack(fill=tk.X)
-
-stats_label = tk.Label(stats_frame, text="", font=FONT_STAT, fg=TEXT_DIM, bg=BG)
-stats_label.pack(side=tk.LEFT)
-
-reset_btn = tk.Label(stats_frame, text=" 重置 ", font=FONT_BTN, fg=TEXT_DIM, bg=BG_INPUT, cursor="hand2", padx=8, pady=2)
-reset_btn.pack(side=tk.RIGHT)
+# 右下角缩放指示
+rg = tk.Label(mf, text="⋮⋮", font=("Consolas", 8), fg=TEXT_DIM, bg=BG, cursor="sb_se_corner")
+rg.place(relx=1.0, rely=1.0, anchor="se", x=-4, y=-4)
+rg.bind("<Button-1>", on_press)
+rg.bind("<B1-Motion>", on_drag)
+rg.bind("<ButtonRelease-1>", on_release)
 
 # === 逻辑 ===
 def update_stats():
-    total = len(tasks)
-    done = sum(1 for t in tasks if t["done"])
-    stats_label.configure(text=f"总计 {total}  ·  完成 {done}  ·  待办 {total - done}")
+    t, d = len(tasks), sum(1 for t in tasks if t["done"])
+    sl.configure(text=f"总计 {t}  ·  完成 {d}  ·  待办 {t-d}")
 
-def toggle_task(idx):
-    tasks[idx]["done"] = not tasks[idx]["done"]
-    save_tasks(tasks)
-    render_tasks()
+def toggle(i):
+    tasks[i]["done"] = not tasks[i]["done"]; save_tasks(tasks); render()
 
-def delete_task(idx):
-    tasks.pop(idx)
-    save_tasks(tasks)
-    render_tasks()
+def delete(i):
+    tasks.pop(i); save_tasks(tasks); render()
 
 def add_task(event=None):
-    text = entry.get().strip()
-    if not text:
-        return
-    tasks.insert(0, {"text": text, "done": False, "time": datetime.now().strftime("%H:%M")})
-    save_tasks(tasks)
-    entry.delete(0, tk.END)
-    render_tasks()
+    txt = entry.get().strip()
+    if not txt: return
+    tasks.insert(0, {"text": txt, "done": False, "time": datetime.now().strftime("%H:%M")})
+    save_tasks(tasks); entry.delete(0, tk.END); render()
 
-def reset_tasks():
-    tasks.clear()
-    save_tasks(tasks)
-    render_tasks()
+def reset_all():
+    tasks.clear(); save_tasks(tasks); render()
 
-def render_tasks():
-    for widget in list_frame.winfo_children():
-        widget.destroy()
-
+def render():
+    for w in lf.winfo_children(): w.destroy()
     if not tasks:
-        tk.Label(list_frame, text="还没有任务，添加一个吧", font=FONT_TASK, fg=TEXT_DIM, bg=BG).pack(pady=40)
-        update_stats()
-        return
-
-    for idx, task in enumerate(tasks):
-        card_bg = BG_CARD if not task["done"] else "#252525"
-        card = tk.Frame(list_frame, bg=card_bg, highlightbackground=BORDER, highlightthickness=1)
-        card.pack(fill=tk.X, pady=3, padx=2)
-
-        check_text = "●" if not task["done"] else "✓"
-        check_fg = ACCENT if not task["done"] else GREEN
-        checkbox = tk.Label(card, text=f" {check_text} ", font=FONT_ICON, fg=check_fg, bg=card_bg, cursor="hand2", width=3)
-        checkbox.pack(side=tk.LEFT, padx=(8, 4), pady=8)
-        checkbox.bind("<Button-1>", lambda e, i=idx: toggle_task(i))
-
-        task_font = FONT_TASK if not task["done"] else FONT_TASK_DONE
-        text_color = TEXT if not task["done"] else TEXT_DIM
-        tk.Label(card, text=task["text"], font=task_font, fg=text_color, bg=card_bg, anchor="w").pack(
-            side=tk.LEFT, fill=tk.X, expand=True, padx=4, pady=8)
-
-        del_btn = tk.Label(card, text=" × ", font=("Consolas", 12), fg=TEXT_DIM, bg=card_bg, cursor="hand2")
-        del_btn.pack(side=tk.RIGHT, padx=(4, 8), pady=8)
-        del_btn.bind("<Button-1>", lambda e, i=idx: delete_task(i))
-        del_btn.bind("<Enter>", lambda e, btn=del_btn: btn.configure(fg=RED))
-        del_btn.bind("<Leave>", lambda e, btn=del_btn: btn.configure(fg=TEXT_DIM))
-
+        tk.Label(lf, text="还没有任务，添加一个吧", font=FNT, fg=TEXT_DIM, bg=BG).pack(pady=40)
+        update_stats(); return
+    for i, t in enumerate(tasks):
+        cbg = BG_CARD if not t["done"] else "#252525"
+        c = tk.Frame(lf, bg=cbg, highlightbackground=BORDER, highlightthickness=1)
+        c.pack(fill=tk.X, pady=3, padx=2)
+        ct = "●" if not t["done"] else "✓"
+        cfg = ACCENT if not t["done"] else GREEN
+        ch = tk.Label(c, text=f" {ct} ", font=FI2, fg=cfg, bg=cbg, cursor="hand2", width=3)
+        ch.pack(side=tk.LEFT, padx=(8, 4), pady=8)
+        ch.bind("<Button-1>", lambda e, idx=i: toggle(idx))
+        tf = FNT if not t["done"] else FNTD
+        tc = TEXT if not t["done"] else TEXT_DIM
+        tk.Label(c, text=t["text"], font=tf, fg=tc, bg=cbg, anchor="w").pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4, pady=8)
+        db = tk.Label(c, text=" × ", font=("Consolas", 12), fg=TEXT_DIM, bg=cbg, cursor="hand2")
+        db.pack(side=tk.RIGHT, padx=(4, 8), pady=8)
+        db.bind("<Button-1>", lambda e, idx=i: delete(idx))
+        db.bind("<Enter>", lambda e, b=db: b.configure(fg=RED))
+        db.bind("<Leave>", lambda e, b=db: b.configure(fg=TEXT_DIM))
     update_stats()
 
-def reset_with_confirm():
+def reset_confirm():
     if messagebox.askyesno("确认", "确定要清空今日所有任务吗？"):
-        reset_tasks()
+        reset_all()
 
-# === 绑定 ===
-add_btn.bind("<Button-1>", add_task)
-add_btn.bind("<Enter>", lambda e: add_btn.configure(bg=ACCENT_HOVER))
-add_btn.bind("<Leave>", lambda e: add_btn.configure(bg=ACCENT))
+ab.bind("<Button-1>", add_task)
+ab.bind("<Enter>", lambda e: ab.configure(bg=ACCENT_HOVER))
+ab.bind("<Leave>", lambda e: ab.configure(bg=ACCENT))
 entry.bind("<Return>", add_task)
-reset_btn.bind("<Button-1>", lambda e: reset_with_confirm())
+rb.bind("<Button-1>", lambda e: reset_confirm())
 
-render_tasks()
+render()
 entry.focus_set()
 root.mainloop()
