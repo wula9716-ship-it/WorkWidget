@@ -212,7 +212,7 @@ rb = tk.Label(sf, text=" 重置 ", font=FB, fg=TEXT_DIM, bg=BG_INPUT, cursor="ha
 rb.pack(side=tk.RIGHT)
 
 # 右下角缩放指示
-rg = tk.Label(mf, text="⋮⋮", font=("Consolas", 8), fg=TEXT_DIM, bg=BG, cursor="sb_se_corner")
+rg = tk.Label(mf, text="⋮⋮", font=("Consolas", 8), fg=TEXT_DIM, bg=BG, cursor="size_nw_se")
 rg.place(relx=1.0, rely=1.0, anchor="se", x=-4, y=-4)
 rg.bind("<Button-1>", on_press)
 rg.bind("<B1-Motion>", on_drag)
